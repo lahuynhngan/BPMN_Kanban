@@ -345,6 +345,13 @@ body.present h1{font-size:34px; line-height:42px}
     <div class="scroll"><table id="hoTable"></table></div>
     <div class="note" id="hoNote"></div>
   </div>
+  <div class="card" id="snaCard">
+    <div class="ch"><div><h2>Phân tích mạng lưới xã hội (SNA)</h2><div class="sub">Mạng bàn giao công việc giữa nhân sự: mũi tên A → B khi B nhận việc ngay sau A trong cùng case · độ dày = số lượt bàn giao · cỡ nút = PageRank</div></div></div>
+    <div class="row" style="align-items:flex-start">
+      <div style="flex:1 1 400px;min-width:0;display:flex;flex-direction:column;gap:8px"><div class="diagram" id="snaGraph"></div><div class="legend"><span><i class="sw" style="background:var(--warn)"></i>Nhân viên Kho</span><span><i class="sw" style="background:var(--accent)"></i>Nhân viên Sản xuất</span><span><i class="sw" style="background:var(--asis)"></i>Khác</span></div></div>
+      <div style="flex:1.5 1 640px;min-width:0;display:flex;flex-direction:column;gap:10px"><div class="scroll"><table id="snaTable"></table></div><div class="note acc" id="snaInsight"></div></div>
+    </div>
+  </div>
   <div class="card">
     <div class="ch"><div><h2>Thử nhanh độ nhạy</h2><div class="sub">Chỉ để xem yếu tố nào ảnh hưởng Cycle Time nhiều nhất. Không đổi dữ liệu AS-IS.</div></div></div>
     <div class="row" style="align-items:center">
@@ -648,8 +655,29 @@ function logStats(events,steps){
   for(let it=0;it<60;it++){ const nx={}; names.forEach(n=>nx[n]=(1-.85)/names.length); let dang=0; names.forEach(n=>{ if(!out[n]) dang+=pr[n]; });
     Object.entries(ho).forEach(([k,v])=>{const [a,b]=k.split('→'); nx[b]+=.85*pr[a]*v/out[a];}); names.forEach(n=>nx[n]+=.85*dang/names.length); pr=nx; }
   const deg={}; names.forEach(n=>deg[n]={in:0,out:0}); Object.keys(ho).forEach(k=>{const [a,b]=k.split('→'); deg[a].out++; deg[b].in++;});
+  const sna=snaMeasures(names,ho,pr);
   const unknown=[...new Set(events.map(e=>e.a))].filter(a=>order.indexOf(a)<0);
-  return {task,trans,persons,ho,pr,deg,gates,cases,mean,median,nCases:cases.length,nEvents:events.length,activities:new Set(events.map(e=>e.a)).size,nPersons:names.length,okStart,okEnd,unknown};
+  return {task,trans,persons,ho,pr,deg,sna,gates,cases,mean,median,nCases:cases.length,nEvents:events.length,activities:new Set(events.map(e=>e.a)).size,nPersons:names.length,okStart,okEnd,unknown};
+}
+function snaMeasures(names,ho,pr){
+  const n=names.length, idx={}; names.forEach((x,i)=>idx[x]=i);
+  const outN=names.map(()=>[]), inN=names.map(()=>[]), inW=names.map(()=>[]);
+  Object.entries(ho).forEach(([k,v])=>{ const [a,b]=k.split('→'); if(idx[a]==null||idx[b]==null) return; outN[idx[a]].push(idx[b]); inN[idx[b]].push(idx[a]); inW[idx[b]].push([idx[a],v]); });
+  const d=n>1?n-1:1;
+  // betweenness (Brandes, directed, unweighted), normalized by (n-1)(n-2)
+  const bc=new Array(n).fill(0);
+  for(let s0=0;s0<n;s0++){ const S=[], P=names.map(()=>[]), sig=new Array(n).fill(0), dist=new Array(n).fill(-1); sig[s0]=1; dist[s0]=0; const Q=[s0];
+    while(Q.length){ const v=Q.shift(); S.push(v); outN[v].forEach(w=>{ if(dist[w]<0){ dist[w]=dist[v]+1; Q.push(w); } if(dist[w]===dist[v]+1){ sig[w]+=sig[v]; P[w].push(v); } }); }
+    const del=new Array(n).fill(0); while(S.length){ const w=S.pop(); P[w].forEach(v=>{ del[v]+=sig[v]/sig[w]*(1+del[w]); }); if(w!==s0) bc[w]+=del[w]; } }
+  const bn=n>2?1/((n-1)*(n-2)):0;
+  // closeness (incoming distances, Wasserman–Faust)
+  const cl=names.map((_,t)=>{ const dist=new Array(n).fill(-1); dist[t]=0; const Q=[t]; while(Q.length){ const v=Q.shift(); inN[v].forEach(u=>{ if(dist[u]<0){ dist[u]=dist[v]+1; Q.push(u); } }); }
+    let r=0,sum=0; dist.forEach((x,i)=>{ if(i!==t&&x>0){ r++; sum+=x; } }); return sum>0&&n>1? (r/sum)*(r/(n-1)) : 0; });
+  // eigenvector (in-edges, weighted, (A+I) power iteration as networkx)
+  let x=new Array(n).fill(1/n);
+  for(let it=0;it<100;it++){ const xl=x; x=xl.slice(); inW.forEach((arr,i)=>arr.forEach(([j,w])=>{ x[i]+=xl[j]*w; })); const nr=Math.sqrt(x.reduce((a,b)=>a+b*b,0))||1; x=x.map(v=>v/nr); if(x.reduce((a,v,i)=>a+Math.abs(v-xl[i]),0)<n*1e-6) break; }
+  const res={}; names.forEach((nm,i)=>{ res[nm]={inD:inN[i].length/d,outD:outN[i].length/d,btw:bc[i]*bn,clo:cl[i],eig:x[i],pr:pr[nm]||0}; });
+  return res;
 }
 function srcStats(){ return S.dataMode==='sim'&&SIMLOG? statsFor(SIMLOG) : statsFor(LOG); }
 function srcLog(){ return S.dataMode==='sim'&&SIMLOG? SIMLOG : LOG; }
@@ -935,6 +963,7 @@ function r2(){
   if(prTop){ const hoTot=Object.values(st.ho).reduce((a,b)=>a+b,0); const hoMe=Object.entries(st.ho).filter(([k])=>k.split('→').indexOf(prTop[0])>=0).reduce((a,[,v])=>a+v,0);
     $('#snaNote').innerHTML=`<b>${esc(prTop[0])}</b> là nút trung tâm của mạng bàn giao (PageRank ${f2(prTop[1]).replace(/,?0+$/,'')} · tham gia ${pct(hoTot?hoMe/hoTot:0,0)} lượt bàn giao) → rủi ro phụ thuộc một đầu mối.`; }
   rHandoff(st);
+  rSna(st);
   // what-if
   const top=dl.length?dl[0].s:S.asis.find(s=>s.id==='T5');
   if(!WI||WI.top!==top.id) WI={top:top.id,g1:gA.G1.nok*100,g2:gA.G2.nok*100,a:top.P+top.W};
@@ -951,6 +980,28 @@ function r2(){
   $('#rootTable').innerHTML=`<thead><tr><th>Điểm nghẽn</th><th>Bằng chứng</th><th>Nguyên nhân gốc</th><th>Giải pháp ở TO-BE</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r[0])}</b></td><td>${esc(r[1])}</td><td contenteditable="true">${esc(r[2])}</td><td contenteditable="true" style="color:var(--accent-ink)">${esc(r[3])}</td></tr>`).join('')}</tbody>`;
 }
 let WI=null;
+function rSna(st){
+  const sna=st.sna||{}; const names=Object.keys(sna).sort((a,b)=>sna[b].pr-sna[a].pr);
+  if(!names.length){ $('#snaGraph').innerHTML='<p style="padding:16px" class="muted">Không có dữ liệu nhân sự.</p>'; $('#snaTable').innerHTML=''; $('#snaInsight').textContent=''; return; }
+  const col=nm=>/KHO/i.test(nm)?'var(--warn)':/SX/i.test(nm)?'var(--accent)':'var(--asis)';
+  const W=560,H=440,cx=W/2,cy=H/2+4,R=160; const pos={}; const ord=Object.keys(sna).sort();
+  ord.forEach((nm,i)=>{ const a=-Math.PI/2+i*2*Math.PI/ord.length; pos[nm]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a)}; });
+  const prMax=Math.max(...names.map(n=>sna[n].pr),0.0001); const rad=nm=>14+22*Math.sqrt(sna[nm].pr/prMax);
+  const edges=Object.entries(st.ho).filter(([k])=>{const [a,b]=k.split('→'); return pos[a]&&pos[b];}); const wMax=Math.max(...edges.map(e=>e[1]),1);
+  let g=`<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Mạng bàn giao công việc giữa nhân sự" style="font-family:var(--font);max-width:${W}px;display:block;margin:0 auto"><defs><marker id="snah" orient="auto" markerWidth="7" markerHeight="7" refX="6" refY="3.5" markerUnits="userSpaceOnUse"><path d="M0 0 L7 3.5 L0 7 Z" style="fill:var(--muted)"/></marker></defs>`;
+  edges.forEach(([k,v])=>{ const [a,b]=k.split('→'); const p=pos[a],q=pos[b]; const dx=q.x-p.x,dy=q.y-p.y,L=Math.hypot(dx,dy)||1; const ux=dx/L,uy=dy/L; const nx=-uy,ny=ux; const off=18;
+    const sx=p.x+ux*rad(a)+nx*4, sy=p.y+uy*rad(a)+ny*4, ex=q.x-ux*(rad(b)+3)+nx*4, ey=q.y-uy*(rad(b)+3)+ny*4; const mx=(sx+ex)/2+nx*off, my=(sy+ey)/2+ny*off;
+    g+=`<path d="M ${sx.toFixed(1)} ${sy.toFixed(1)} Q ${mx.toFixed(1)} ${my.toFixed(1)} ${ex.toFixed(1)} ${ey.toFixed(1)}" style="fill:none;stroke:var(--muted);stroke-opacity:.55;stroke-width:${(1+5*v/wMax).toFixed(1)}" marker-end="url(#snah)"><title>${esc(a)} → ${esc(b)}: ${v} lượt</title></path>`; });
+  ord.forEach(nm=>{ const p=pos[nm], r=rad(nm); const ly=p.y<cy-20?p.y-r-8:p.y+r+16;
+    g+=`<g><title>${esc(nm)} · PageRank ${f2(sna[nm].pr)}</title><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r.toFixed(1)}" style="fill:${col(nm)};stroke:var(--surface);stroke-width:3"/><text x="${p.x.toFixed(1)}" y="${(p.y+4).toFixed(1)}" text-anchor="middle" style="font-size:11px;font-weight:700;fill:var(--surface)">${f2(sna[nm].pr)}</text><text x="${p.x.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" style="font-size:12px;font-weight:600;fill:var(--fg)">${esc(nm)}</text></g>`; });
+  $('#snaGraph').innerHTML=g+'</svg>';
+  const f3=v=>nf(3).format(v); const keys=[['inD','In-Degree'],['outD','Out-Degree'],['btw','Betweenness'],['clo','Closeness'],['eig','Eigenvector'],['pr','PageRank']];
+  const top={}; keys.forEach(([k])=>{ top[k]=Math.max(...names.map(n=>sna[n][k])); });
+  $('#snaTable').innerHTML=`<thead><tr><th>Nhân sự</th>${keys.map(k=>`<th class="r">${k[1]}</th>`).join('')}</tr></thead><tbody>${names.map((n,i)=>`<tr class="${i===0?'hl':''}"><td><b>${esc(n)}</b></td>${keys.map(([k])=>`<td class="r" style="${sna[n][k]>0&&Math.abs(sna[n][k]-top[k])<1e-9?'font-weight:700;color:var(--warn)':''}">${f3(sna[n][k])}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  const best=k=>names.filter(n=>sna[n][k]>0&&Math.abs(sna[n][k]-top[k])<1e-9); const prT=best('pr'), btT=best('btw'), inT=best('inD'), clT=best('clo'), outT=best('outD');
+  const iso=names.filter(n=>sna[n].inD===0);
+  $('#snaInsight').innerHTML=`<b>${esc(prT.join(', '))}</b> có PageRank cao nhất${inT.length&&inT.join()===prT.join()?' và In-Degree cao nhất':''}${clT.length&&clT.join()===prT.join()?', Closeness cao nhất':''} → đầu mối nhận và điều phối công việc. ${btT.length?`<b>${esc(btT.join(', '))}</b> có Betweenness cao nhất${outT.join()===btT.join()?' và Out-Degree cao nhất':''} → vai trò trung gian bàn giao. `:''}${iso.length?esc(iso.join(', '))+' không nhận bàn giao từ ai (In-Degree = 0), chủ yếu khởi tạo yêu cầu. ':''}Quy trình phụ thuộc vào ít đầu mối: khi các nhân sự này vắng mặt, luồng bàn giao Kho – Sản xuất dễ gián đoạn.`;
+}
 function rHandoff(st){
   const order=S.asis.map(s=>s.id); const lane=id=>{const s=S.asis.find(x=>x.id===id); return s?s.lane:'kho';};
   const rows=Object.entries(st.trans).map(([k,v])=>{ const [a,b]=k.split('→'); const nm=hoNorm(a,b); const late=v.gaps.filter(g=>g>nm+1e-9); const lateMin=late.reduce((x,g)=>x+(g-nm),0);
